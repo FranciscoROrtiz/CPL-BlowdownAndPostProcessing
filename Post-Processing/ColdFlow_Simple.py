@@ -1,0 +1,211 @@
+# filename: PP_ColdFlow2_PostProcessing_v8.py
+# created: 05.09.26
+# last edited: 05.09.26
+# authors: Francisco Ortiz, Diego Ortiz
+# purpose: plot test data
+
+import json
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import math
+import CoolProp.CoolProp as CP
+import os
+import glob
+from scipy.signal import savgol_filter
+
+from scipy import signal
+
+def lowpass_filter(data, cutoff, fs, order=15):
+    # 'sos' output is recommended for better numerical stability
+    sos = signal.butter(order, cutoff, btype='low', fs=fs, output='sos')
+    # Use sosfiltfilt for zero-phase filtering (no time delay)
+    filtered_data = signal.sosfiltfilt(sos, data)
+    return filtered_data
+
+def MBV_start_end_idx(MBV):
+    MBV_idx = np.where(MBV == True)[0]
+    start_idx = MBV_idx[0]
+    end_idx = np.where((MBV == False) & (np.arange(len(MBV)) > start_idx))[0][0]
+    return start_idx, end_idx
+# ============================================================
+# CONFIG
+# ============================================================
+
+"""
+vvv FILE INPUTS vvv
+"""
+# Path to test data file
+file = r"C:\Users\franc\Downloads\CPL - Post Processing Scripts\All Coldflow and Hotfire Data\TD_HF_1.parquet"
+
+# Name of directory to save figures of data in
+out_dir = r"C:\Users\franc\Downloads\CPL - Post Processing Scripts\All Coldflow and Hotfire Data\TD_HF_1"
+os.makedirs(out_dir, exist_ok=True)
+
+# Name of test for labeling
+test_name = "Toad - HF1"
+
+t_min = 0
+t_max = 1200
+
+"""
+^^^ FILE INPUTS ^^^
+"""
+
+
+psi_to_pa = 6894.75729
+
+# ============================================================
+# CLEAN OUTPUT
+# ============================================================
+for f in glob.glob(os.path.join(out_dir, "*.png")):
+    os.remove(f)
+
+print("Deleted old plots")
+
+# ============================================================
+# LOAD DATA
+# ============================================================
+df = pd.read_parquet(file)
+
+print("\nCOLUMNS IN DATAFRAME:")
+for col in df.columns:
+    print(col)
+
+df['timestamp'] = pd.to_datetime(df['timestamp'])
+df = df.sort_values('timestamp')
+df['time_sec'] = (df['timestamp'] - df['timestamp'].iloc[0]).dt.total_seconds()
+dt_sample = df['time_sec'].iloc[1]-df['time_sec'].iloc[0]
+print(f"dt = {dt_sample} [s]")
+print(f"f_s = {1/dt_sample} [Hz]")
+
+# ============================================================
+# SAVE FUNCTION
+# ============================================================
+def save_fig(name):
+    path = os.path.join(out_dir, f"{test_name} - {name}.png")
+    plt.savefig(path, dpi=300, bbox_inches='tight')
+
+# ============================================================
+# TIME WINDOW HELPER
+# ============================================================
+def apply_time_window(t_min, t_max, ax=None):
+    if ax is None:
+        plt.xlim(t_min, t_max)
+    else:
+        ax.set_xlim(t_min, t_max)
+
+# ============================================================
+# PT PLOTS
+# ============================================================
+def plot_pt(time, pt_col, valve_cols, title, t_ends):
+    t_min = t_ends[0]
+    t_max = t_ends[1]
+    fig, ax1 = plt.subplots(figsize=(10, 4))
+
+    l1, = ax1.plot(time, df[pt_col], label=pt_col)
+    ax1.set_xlabel("Time (s)")
+    ax1.set_ylabel(pt_col)
+    ax1.grid(True)
+
+    apply_time_window(t_min, t_max, ax1)
+
+    ax2 = ax1.twinx()
+
+    valve_lines = []
+    valve_labels = []
+
+    for v in valve_cols:
+        if v in df.columns:
+            line, = ax2.step(time, df[v], where='post', linestyle='--')
+            valve_lines.append(line)
+            valve_labels.append(v)
+
+    ax2.set_ylabel("Valve State")
+
+    ax1.legend([l1] + valve_lines, [pt_col] + valve_labels)
+
+    plt.title(title)
+    plt.tight_layout()
+    # plt.xlim(210,230)
+    save_fig(pt_col)
+
+# ============================================================
+# PT PLOTS
+# ============================================================
+
+
+plot_pt(df['time_sec'], 'PT_ox_fill', ['SV_ox_fill.open'], 'PT_ox_fill', [t_min, t_max])
+plot_pt(df['time_sec'], 'PT_n2_fill', ['SV_N2_fill.open', 'MBV_fuel_run.open', 'SV_fuel_vent.open'], 'PT_n2_fill', [t_min, t_max])
+plot_pt(df['time_sec'], 'PT_ox_tank', ['SV_ox_vent.open', 'MBV_ox_run.open', 'SV_ox_fill.open'], 'PT_ox_tank', [t_min, t_max])
+plot_pt(df['time_sec'], 'PT_fuel_tank', ['SV_fuel_vent.open', 'MBV_fuel_run.open', 'SV_N2_fill.open'], 'PT_fuel_tank', [t_min, t_max])
+plot_pt(df['time_sec'], 'PT_chamber', ['MBV_ox_run.open', 'MBV_fuel_run.open'], 'PT_chamber', [t_min, t_max])
+plot_pt(df['time_sec'], 'LC_ox_tank', ['SV_ox_vent.open', 'MBV_ox_run.open', 'SV_ox_fill.open'], 'LC_ox_tank', [t_min, t_max])
+plot_pt(df['time_sec'], 'TC_aft', ['MBV_ox_run.open', 'MBV_fuel_run.open'], 'TC_aft', [t_min, t_max])
+plot_pt(df['time_sec'], 'TC_mid', ['MBV_ox_run.open', 'MBV_fuel_run.open'], 'TC_mid', [t_min, t_max])
+plot_pt(df['time_sec'], 'TC_fwd', ['MBV_ox_run.open', 'MBV_fuel_run.open'], 'TC_fwd', [t_min, t_max])
+plot_pt(df['time_sec'], 'pt_VT_throat', ['SV_fuel_vent.open', 'MBV_fuel_run.open', 'SV_N2_fill.open'], 'pt_VT_throat', [t_min, t_max])
+plot_pt(df['time_sec'], 'pt_VT_upstream', ['SV_fuel_vent.open', 'MBV_fuel_run.open', 'SV_N2_fill.open'], 'pt_VT_upstream', [t_min, t_max])
+plot_pt(df['time_sec'], 'LC_TOTAL', ['MBV_ox_run.open', 'MBV_fuel_run.open'], 'LC_TOTAL', [t_min, t_max])
+
+with open("t_TD_HF_1.json", 'r') as file:
+    t_sim = json.load(file)
+with open("Pc_TD_HF_1.json", 'r') as file:
+    Pc_sim = json.load(file)
+with open("Thrust_TD_HF_1.json", 'r') as file:
+    Thrust_sim = json.load(file)
+with open("Pox_TD_HF_1.json", 'r') as file:
+    Pox_sim = json.load(file)
+with open("Pfuel_TD_HF_1.json", 'r') as file:
+    Pfuel_sim = json.load(file)
+with open("mox_TD_HF_1.json", 'r') as file:
+    mox_sim = json.load(file)
+
+t_sim = np.array(t_sim) + 525*np.ones(len(t_sim))
+Pc_sim = np.array(Pc_sim)*(1/6894.76) - 14.7*np.ones(len(Pc_sim))
+Thrust_sim = np.array(Thrust_sim) * 0.224809
+Pox_sim = np.array(Pox_sim)*(1/6894.76) - 14.7*np.ones(len(Pox_sim))
+Pfuel_sim = np.array(Pfuel_sim)*(1/6894.76) - 14.7*np.ones(len(Pfuel_sim))
+mox_sim = np.array(mox_sim)*2.20462 + 2.53*np.ones(len(mox_sim))
+
+plt.figure()
+plt.plot(t_sim, Pc_sim)
+plt.plot(df['time_sec'], df['PT_chamber'])
+plt.title('Pc')
+plt.xlabel('time [s]')
+plt.ylabel('Pc_g [psi]')
+
+plt.figure()
+plt.plot(t_sim, Thrust_sim)
+plt.plot(df['time_sec'], df['LC_TOTAL'])
+plt.title('Thrust')
+plt.xlabel('time [s]')
+plt.ylabel('Thrust [lb]')
+
+plt.figure()
+plt.plot(t_sim, mox_sim)
+plt.plot(df['time_sec'], df['LC_ox_tank'])
+plt.title('m_ox')
+plt.xlabel('time [s]')
+plt.ylabel('m_ox [lb]')
+
+t_sim = t_sim - 2*np.ones(len(t_sim))
+
+plt.figure()
+plt.plot(t_sim, Pox_sim)
+plt.plot(df['time_sec'], df['PT_ox_tank'])
+plt.title('P_ox_tank')
+plt.xlabel('time [s]')
+plt.ylabel('P_ox_tank_g [psi]')
+
+plt.figure()
+plt.plot(t_sim, Pfuel_sim)
+plt.plot(df['time_sec'], df['PT_fuel_tank'])
+plt.title('P_fuel_tank')
+plt.xlabel('time [s]')
+plt.ylabel('P_fuel_tank_g [psi]')
+
+# ============================================================
+# SHOW
+# ============================================================
+plt.show()
